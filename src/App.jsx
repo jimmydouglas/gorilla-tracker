@@ -1095,6 +1095,84 @@ function ProfileTab({ history, onScan }) {
   );
 }
 
+// ── TrendsChart ────────────────────────────────────────────────────────────
+function TrendsChart({ data, valueKey, target, label, unit, color = "#c8f542", maxVal }) {
+  if (!data.length) return null;
+  const VW = 340, VH = 90, LEFT = 30, RIGHT = 4, TOP = 6, BOT = 18;
+  const CW = VW - LEFT - RIGHT, CH = VH - TOP - BOT;
+  const vals = data.map(d => d[valueKey] || 0);
+  const max = maxVal || Math.max(...vals, target * 1.25, 1);
+  const toY = v => TOP + CH - Math.min((v / max) * CH, CH);
+  const n = data.length;
+  const slotW = CW / n;
+  const barW = Math.max(3, Math.min(slotW * 0.65, 18));
+  const targetY = toY(target);
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#888", letterSpacing: "0.12em", textTransform: "uppercase" }}>{label}</span>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#ff9500" }}>target {target}{unit}</span>
+      </div>
+      <svg viewBox={`0 0 ${VW} ${VH}`} style={{ width: "100%", display: "block" }}>
+        <rect x={LEFT} y={TOP} width={CW} height={CH} fill="#0d0d0d" rx={2} />
+        <line x1={LEFT} y1={targetY} x2={LEFT + CW} y2={targetY} stroke="#ff9500" strokeWidth={0.8} strokeDasharray="3,3" opacity={0.6} />
+        {data.map((d, i) => d.weekStart && i > 0 && (
+          <line key={`wb${i}`} x1={LEFT + i * slotW} y1={TOP} x2={LEFT + i * slotW} y2={TOP + CH} stroke="#2a2a2a" strokeWidth={1} />
+        ))}
+        {data.map((d, i) => {
+          const val = d[valueKey] || 0;
+          const h = Math.max(val > 0 ? 2 : 0, (val / max) * CH);
+          const x = LEFT + i * slotW + (slotW - barW) / 2;
+          const pct = target > 0 ? val / target : 0;
+          const c = val === 0 ? "#1a1a1a" : pct >= 0.9 ? color : pct >= 0.6 ? "#ff9500" : "#ff4444";
+          return <rect key={i} x={x} y={TOP + CH - h} width={barW} height={h} fill={c} rx={1} />;
+        })}
+        {data.map((d, i) => {
+          if (n > 14 && i % 2 !== 0 && !d.weekStart) return null;
+          return (
+            <text key={`lbl${i}`} x={LEFT + i * slotW + slotW / 2} y={VH - 3}
+              fill={d.weekStart && i > 0 ? "#555" : "#333"} fontSize={6} textAnchor="middle">{d.label}</text>
+          );
+        })}
+        <text x={LEFT - 2} y={TOP + 5} fill="#333" fontSize={6} textAnchor="end">{max.toFixed(0)}</text>
+        <text x={LEFT - 2} y={targetY + 2} fill="#664400" fontSize={6} textAnchor="end">{target}</text>
+      </svg>
+    </div>
+  );
+}
+
+function TrendsSection({ history }) {
+  const days = Object.keys(history).sort();
+  if (days.length < 2) return null;
+  const firstDate = new Date(days[0] + "T12:00:00");
+  const data = days.map(date => {
+    const day = history[date];
+    const meals = day.meals || [];
+    const d = new Date(date + "T12:00:00");
+    const dayNum = Math.floor((d - firstDate) / 86400000);
+    return {
+      date,
+      label: `${d.getMonth() + 1}/${d.getDate()}`,
+      weekStart: dayNum > 0 && dayNum % 7 === 0,
+      protein: Math.round(meals.reduce((s, m) => s + (m.protein || 0), 0)),
+      calories: Math.round(meals.reduce((s, m) => s + (m.calories || 0), 0)),
+      fiber: Math.round(meals.reduce((s, m) => s + (m.fiber || 0), 0)),
+      sleep: day.sleep?.hours || 0,
+    };
+  });
+  const hasSleep = data.some(d => d.sleep > 0);
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: "#555", marginBottom: 14, letterSpacing: "0.05em" }}>Trends</div>
+      <TrendsChart data={data} valueKey="protein" target={165} label="Protein" unit="g" color="#c8f542" />
+      <TrendsChart data={data} valueKey="calories" target={2050} label="Calories" unit="cal" color="#5599ff" maxVal={2800} />
+      <TrendsChart data={data} valueKey="fiber" target={35} label="Fiber" unit="g" color="#aa88ff" />
+      {hasSleep && <TrendsChart data={data} valueKey="sleep" target={8} label="Sleep" unit="h" color="#ff9500" maxVal={11} />}
+    </div>
+  );
+}
+
 // ── CoachTab ───────────────────────────────────────────────────────────────
 function CoachTab({ history, todayTotals, needed }) {
   const [brief, setBrief] = useState(null);
@@ -1142,6 +1220,8 @@ function CoachTab({ history, todayTotals, needed }) {
     <div>
       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, marginBottom: 4 }}>Coach</div>
       <div style={{ fontSize: 12, color: "#555", marginBottom: 20 }}>Analyzes your food, sleep, workouts, and trends against your goals.</div>
+
+      <TrendsSection history={history} />
 
       <button onClick={generate} disabled={loading} style={{
         width: "100%", padding: "16px", background: loading ? "#1a1a1a" : "#c8f542",
