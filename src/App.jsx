@@ -582,71 +582,63 @@ function MetaLogger({ day, onUpdate }) {
   });
 
   return (
-    <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+    <div style={{ marginBottom: 16 }}>
       <input ref={sleepFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => scanSleep(e.target.files[0])} />
       <input ref={workoutFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => scanWorkout(e.target.files[0])} />
 
-      {/* Sleep */}
-      <div style={{ flex: 1 }}>
-        <div style={{ display: "flex", gap: 4, marginBottom: sleepOpen ? 8 : 0 }}>
-          <button onClick={() => setSleepOpen(o => !o)} style={{
-            flex: 1, padding: "10px", background: day.sleep ? "#1a2a1a" : "#1a1a1a",
-            border: `1px solid ${day.sleep ? "#c8f542" : "#2a2a2a"}`, borderRadius: 6,
-            cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 10,
-            color: day.sleep ? "#c8f542" : "#888", letterSpacing: "0.12em", textTransform: "uppercase",
-          }}>
-            {day.sleep ? `😴 ${day.sleep.hours}h · ${day.sleep.score}` : "😴 SLEEP"}
-          </button>
-          <button onClick={() => sleepFileRef.current?.click()} style={scanBtn(sleepScanning, "📸")}>
-            {sleepScanning ? "..." : "📸"}
-          </button>
-        </div>
-        {sleepOpen && (
-          <div style={{ display: "flex", gap: 8 }}>
-            {inp(sleep.hours, v => setSleep(s => ({ ...s, hours: v })), "Hours")}
-            {inp(sleep.score, v => setSleep(s => ({ ...s, score: v })), "Score")}
-            <button onClick={saveSleep} style={{
-              padding: "10px 14px", background: "#c8f542", border: "none", borderRadius: 4,
-              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a",
-            }}>✓</button>
-          </div>
-        )}
+      {/* Button row — always side by side */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        <button onClick={() => { setSleepOpen(o => !o); setWorkoutOpen(false); }} style={{
+          flex: 1, padding: "10px", background: day.sleep ? "#1a2a1a" : "#1a1a1a",
+          border: `1px solid ${day.sleep ? "#c8f542" : "#2a2a2a"}`, borderRadius: 6,
+          cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 10,
+          color: day.sleep ? "#c8f542" : "#888", letterSpacing: "0.12em", textTransform: "uppercase",
+        }}>{day.sleep ? `😴 ${day.sleep.hours}h · ${day.sleep.score}` : "😴 SLEEP"}</button>
+        <button onClick={() => sleepFileRef.current?.click()} style={scanBtn(sleepScanning)}>
+          {sleepScanning ? "..." : "📸"}
+        </button>
+        <button onClick={() => { setWorkoutOpen(o => !o); setSleepOpen(false); }} style={{
+          flex: 1, padding: "10px", background: day.workout ? "#1a2a1a" : "#1a1a1a",
+          border: `1px solid ${day.workout ? "#c8f542" : "#2a2a2a"}`, borderRadius: 6,
+          cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 10,
+          color: day.workout ? "#c8f542" : "#888", letterSpacing: "0.12em", textTransform: "uppercase",
+        }}>{day.workout ? `💪 ${day.workout.calories}cal` : "💪 WORKOUT"}</button>
+        <button onClick={() => workoutFileRef.current?.click()} style={scanBtn(workoutScanning)}>
+          {workoutScanning ? "..." : "📸"}
+        </button>
       </div>
 
-      {/* Workout */}
-      <div style={{ flex: 1 }}>
-        <div style={{ display: "flex", gap: 4, marginBottom: workoutOpen ? 8 : 0 }}>
-          <button onClick={() => setWorkoutOpen(o => !o)} style={{
-            flex: 1, padding: "10px", background: day.workout ? "#1a2a1a" : "#1a1a1a",
-            border: `1px solid ${day.workout ? "#c8f542" : "#2a2a2a"}`, borderRadius: 6,
-            cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 10,
-            color: day.workout ? "#c8f542" : "#888", letterSpacing: "0.12em", textTransform: "uppercase",
-          }}>
-            {day.workout ? `💪 ${day.workout.calories}cal` : "💪 WORKOUT"}
-          </button>
-          <button onClick={() => workoutFileRef.current?.click()} style={scanBtn(workoutScanning, "📸")}>
-            {workoutScanning ? "..." : "📸"}
-          </button>
+      {/* Sleep form — full width below buttons */}
+      {sleepOpen && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          {inp(sleep.hours, v => setSleep(s => ({ ...s, hours: v })), "Hours")}
+          {inp(sleep.score, v => setSleep(s => ({ ...s, score: v })), "Score")}
+          <button onClick={saveSleep} style={{
+            padding: "10px 14px", background: "#c8f542", border: "none", borderRadius: 4,
+            cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a",
+          }}>✓</button>
         </div>
-        {workoutOpen && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <select value={workout.type} onChange={e => setWorkout(w => ({ ...w, type: e.target.value }))}
-              style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 4, padding: "10px 12px", color: "#f5f2ed", fontSize: 13 }}>
-              <option>HIIT</option><option>Run</option><option>Golf</option><option>Rest</option>
-            </select>
-            <div style={{ display: "flex", gap: 8 }}>
-              {inp(workout.duration, v => setWorkout(w => ({ ...w, duration: v })), "Mins")}
-              {inp(workout.calories, v => setWorkout(w => ({ ...w, calories: v })), "Cal")}
-              {inp(workout.hr, v => setWorkout(w => ({ ...w, hr: v })), "BPM")}
-              {inp(workout.effort, v => setWorkout(w => ({ ...w, effort: v })), "Effort")}
-            </div>
-            <button onClick={saveWorkout} style={{
-              padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
-              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a",
-            }}>SAVE WORKOUT</button>
+      )}
+
+      {/* Workout form — full width below buttons */}
+      {workoutOpen && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <select value={workout.type} onChange={e => setWorkout(w => ({ ...w, type: e.target.value }))}
+            style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 4, padding: "10px 12px", color: "#f5f2ed", fontSize: 13 }}>
+            <option>HIIT</option><option>Run</option><option>Golf</option><option>Rest</option>
+          </select>
+          <div style={{ display: "flex", gap: 8 }}>
+            {inp(workout.duration, v => setWorkout(w => ({ ...w, duration: v })), "Mins")}
+            {inp(workout.calories, v => setWorkout(w => ({ ...w, calories: v })), "Cal")}
+            {inp(workout.hr, v => setWorkout(w => ({ ...w, hr: v })), "BPM")}
+            {inp(workout.effort, v => setWorkout(w => ({ ...w, effort: v })), "Effort")}
           </div>
-        )}
-      </div>
+          <button onClick={saveWorkout} style={{
+            padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
+            cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a",
+          }}>SAVE WORKOUT</button>
+        </div>
+      )}
     </div>
   );
 }
