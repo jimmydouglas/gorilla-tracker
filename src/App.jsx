@@ -33,9 +33,9 @@ async function analyzeFoodPhoto(base64, mimeType) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 1000,
-      system: `You are a precise nutrition analyzer for a fitness tracking app. 
+      system: `You are a precise nutrition analyzer for a fitness tracking app.
 The user is a 41yo male, 167 lbs, targeting 165g protein / 2100 cal / 35g fiber daily.
 When shown a food photo, respond ONLY with valid JSON (no markdown, no explanation):
 {"name":"<short meal name>","protein":<number>,"calories":<number>,"fiber":<number>,"notes":"<1 sentence observation>"}
@@ -51,10 +51,27 @@ Be accurate. If the image is unclear, make your best estimate. Never refuse.`,
       ],
     }),
   });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `API error ${resp.status}`);
+  }
+
   const data = await resp.json();
-  const text = data.content?.find(b => b.type === "text")?.text || "{}";
-  const clean = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+  const text = data.content?.find(b => b.type === "text")?.text;
+  if (!text) throw new Error("No text in API response");
+
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("No JSON found in response");
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  return {
+    name: parsed.name || "Unknown meal",
+    protein: Number(parsed.protein) || 0,
+    calories: Number(parsed.calories) || 0,
+    fiber: Number(parsed.fiber) || 0,
+    notes: parsed.notes || "",
+  };
 }
 
 // ── MacroRing ──────────────────────────────────────────────────────────────
