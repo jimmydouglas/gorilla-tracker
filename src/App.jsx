@@ -652,7 +652,7 @@ function MetaLogger({ day, onUpdate }) {
       style={{
         background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 4,
         padding: "10px 12px", color: "#f5f2ed", fontSize: 13,
-        fontFamily: "'DM Sans', sans-serif", flex: 1,
+        fontFamily: "'DM Sans', sans-serif", flex: 1, minWidth: 0,
       }}
     />
   );
