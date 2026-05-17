@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
 // ── constants ──────────────────────────────────────────────────────────────
-const TARGETS = { protein: 165, calories: 2100, fiber: 35 };
+const DEFAULT_TARGETS = { protein: 165, calories: 2100, fiber: 35 };
 const PROFILE = {
   name: "Jimmy",
   weight: 166.9,
@@ -253,6 +253,66 @@ Analyze this data and respond ONLY with valid JSON:
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) throw new Error("No JSON in response");
   return JSON.parse(m[0]);
+}
+
+async function calculateTargets(history) {
+  const today = new Date();
+  const laborDay = new Date("2026-09-07");
+  const weeksRemaining = Math.max(1, Math.round((laborDay - today) / (7 * 86400000)));
+
+  const scans = Object.entries(history)
+    .filter(([, d]) => d.bodyScan)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => `${date}: ${d.bodyScan.weight}lbs, ${d.bodyScan.smm}lb SMM, ${d.bodyScan.fatMass}lb fat`);
+
+  const scanText = scans.length
+    ? `Body scan history:\n${scans.join("\n")}`
+    : `No scans logged yet. Use baseline: 166.9 lbs, 81.4 lbs SMM, 24.9 lbs fat (May 16, 2026).`;
+
+  const prompt = `You are a precision physique coach computing macro targets.
+
+ATHLETE: Jimmy Douglas, 41M, on Zepbound (tirzepatide) — appetite suppression is significant. Never push calories above comfortable fullness.
+GOAL: Samuel Johnston physique — 85-88 lbs SMM, 10-12% BF by Labor Day 2026 (${weeksRemaining} weeks away)
+TRAINING: HIIT 3x/week (30 min, ~280 cal) + outdoor runs 2x/week (~270 cal). BMR ~1,725.
+
+${scanText}
+
+Compute:
+1. Required weekly fat loss rate (lbs/week) to hit goal by deadline
+2. Required weekly muscle gain rate (lbs/week) to hit goal by deadline
+3. Daily protein target: floor to preserve/build muscle (scale with current LBM)
+4. Daily calorie target: TDEE minus appropriate deficit, accounting for tirzepatide suppression
+5. Fiber target: for metabolic health and satiety support
+
+Return ONLY valid JSON:
+{
+  "protein": <grams>,
+  "calories": <number>,
+  "fiber": <grams>,
+  "weeklyFatLoss": <lbs>,
+  "weeklyMuscleGain": <lbs>,
+  "weeksRemaining": ${weeksRemaining},
+  "rationale": "<2-3 direct sentences explaining why these numbers>"
+}`;
+
+  const resp = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 512,
+      system: "You are a precise fitness coach. Return only valid JSON, no markdown.",
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  const data = await resp.json();
+  const text = data.content?.[0]?.text || "";
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("No JSON in response");
+  const result = JSON.parse(m[0]);
+  result.updatedAt = new Date().toISOString();
+  return result;
 }
 
 async function getWeeklyReport(history) {
@@ -795,7 +855,7 @@ function MetaLogger({ day, onUpdate }) {
 }
 
 // ── WeeklyReport ───────────────────────────────────────────────────────────
-function WeeklyReport({ history }) {
+function WeeklyReport({ history, targets = DEFAULT_TARGETS }) {
   const days = Object.values(history).slice(-7);
   if (days.length === 0) return <div style={{ color: "#555", textAlign: "center", padding: 40 }}>No data yet</div>;
 
@@ -813,9 +873,9 @@ function WeeklyReport({ history }) {
           <tbody>
             {days.map(day => {
               const s = sumDay(day.meals || []);
-              const pOk = s.protein >= TARGETS.protein;
-              const cOk = s.calories <= TARGETS.calories;
-              const fOk = s.fiber >= TARGETS.fiber;
+              const pOk = s.protein >= targets.protein;
+              const cOk = s.calories <= targets.calories;
+              const fOk = s.fiber >= targets.fiber;
               return (
                 <tr key={day.date} style={{ borderBottom: "1px solid #1a1a1a" }}>
                   <td style={{ padding: "10px 12px", color: "#888" }}>{day.date.slice(5)}</td>
@@ -965,9 +1025,11 @@ function AnalyzedCard({ item, index, total, onConfirm, onDismiss }) {
 }
 
 // ── ProfileTab ─────────────────────────────────────────────────────────────
-function ProfileTab({ history, onScan }) {
+function ProfileTab({ history, onScan, targets = DEFAULT_TARGETS, onUpdateTargets }) {
   const [scanning, setScanning] = useState(false);
   const [form, setForm] = useState(null);
+  const [calibrating, setCalibrating] = useState(false);
+  const [pendingTargets, setPendingTargets] = useState(null);
   const fileRef = useRef();
 
   const scans = Object.entries(history)
@@ -998,6 +1060,23 @@ function ProfileTab({ history, onScan }) {
     setForm(null);
   };
 
+  const runCalibration = async () => {
+    setCalibrating(true);
+    try {
+      const result = await calculateTargets(history);
+      setPendingTargets(result);
+    } catch (err) {
+      alert("Calibration failed: " + err.message);
+    } finally {
+      setCalibrating(false);
+    }
+  };
+
+  const confirmTargets = () => {
+    onUpdateTargets({ protein: pendingTargets.protein, calories: pendingTargets.calories, fiber: pendingTargets.fiber, updatedAt: pendingTargets.updatedAt, rationale: pendingTargets.rationale, weeklyFatLoss: pendingTargets.weeklyFatLoss, weeklyMuscleGain: pendingTargets.weeklyMuscleGain, weeksRemaining: pendingTargets.weeksRemaining });
+    setPendingTargets(null);
+  };
+
   const inp = (field, label) => (
     <div style={{ flex: 1 }}>
       <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#555", textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
@@ -1013,9 +1092,9 @@ function ProfileTab({ history, onScan }) {
       {/* Targets */}
       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, marginBottom: 16 }}>Body Stats</div>
       {[
-        { label: "Protein Target", val: "165g/day" },
-        { label: "Calorie Target", val: "2,000–2,100/day" },
-        { label: "Fiber Target", val: "35g/day" },
+        { label: "Protein Target", val: `${targets.protein}g/day` },
+        { label: "Calorie Target", val: `${targets.calories.toLocaleString()}/day` },
+        { label: "Fiber Target", val: `${targets.fiber}g/day` },
         { label: "Shredded By", val: PROFILE.shredded, color: "#c8f542" },
         { label: "Gorilla By", val: PROFILE.gorilla, color: "#c8f542" },
       ].map(({ label, val, color }) => (
@@ -1024,6 +1103,22 @@ function ProfileTab({ history, onScan }) {
           <span style={{ fontSize: 14, color: color || "#f5f2ed" }}>{val}</span>
         </div>
       ))}
+      {targets.updatedAt && (
+        <div style={{ marginTop: 6, marginBottom: 4 }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#555", letterSpacing: "0.1em" }}>
+            AI CALIBRATED · {new Date(targets.updatedAt).toLocaleDateString()} · {targets.weeksRemaining}w to Labor Day
+          </div>
+          {targets.rationale && (
+            <div style={{ fontSize: 11, color: "#666", lineHeight: 1.4, marginTop: 4 }}>{targets.rationale}</div>
+          )}
+          {targets.weeklyFatLoss && (
+            <div style={{ display: "flex", gap: 16, marginTop: 6 }}>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#ff9500" }}>−{targets.weeklyFatLoss} lbs fat/wk</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#c8f542" }}>+{targets.weeklyMuscleGain} lbs muscle/wk</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Progress */}
       <div style={{ marginTop: 20, padding: 16, background: "#141414", borderRadius: 8, marginBottom: 16 }}>
@@ -1048,6 +1143,50 @@ function ProfileTab({ history, onScan }) {
           </div>
         )}
       </div>
+
+      {/* Calibrate targets */}
+      <button onClick={runCalibration} disabled={calibrating} style={{
+        width: "100%", padding: "14px", background: calibrating ? "#1a1a1a" : "#1a0a1a",
+        border: "1px solid #aa88ff", borderRadius: 6, cursor: calibrating ? "not-allowed" : "pointer",
+        fontFamily: "'DM Mono', monospace", fontSize: 11, color: calibrating ? "#555" : "#aa88ff",
+        letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8,
+      }}>{calibrating ? "CALIBRATING..." : "⚡ CALIBRATE TARGETS"}</button>
+
+      {pendingTargets && (
+        <div style={{ background: "#141414", border: "1px solid #aa88ff", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#aa88ff", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 10 }}>NEW TARGETS</div>
+          <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
+            {[
+              { label: "Protein", val: `${pendingTargets.protein}g`, color: "#c8f542" },
+              { label: "Calories", val: pendingTargets.calories.toLocaleString(), color: "#5599ff" },
+              { label: "Fiber", val: `${pendingTargets.fiber}g`, color: "#aa88ff" },
+            ].map(({ label, val, color }) => (
+              <div key={label} style={{ flex: 1, textAlign: "center" }}>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, color, lineHeight: 1 }}>{val}</div>
+                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#555", textTransform: "uppercase", marginTop: 3 }}>{label}</div>
+              </div>
+            ))}
+          </div>
+          {pendingTargets.weeklyFatLoss && (
+            <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#ff9500" }}>−{pendingTargets.weeklyFatLoss} lbs fat/wk</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#c8f542" }}>+{pendingTargets.weeklyMuscleGain} lbs muscle/wk</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#555" }}>{pendingTargets.weeksRemaining}w remaining</span>
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: "#888", lineHeight: 1.4, marginBottom: 12 }}>{pendingTargets.rationale}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={confirmTargets} style={{
+              flex: 2, padding: "10px", background: "#aa88ff", border: "none", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a", letterSpacing: "0.1em",
+            }}>APPLY TARGETS</button>
+            <button onClick={() => setPendingTargets(null)} style={{
+              flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #333", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
+            }}>DISMISS</button>
+          </div>
+        </div>
+      )}
 
       {/* Log scan */}
       <button onClick={() => fileRef.current?.click()} disabled={scanning} style={{
@@ -1142,7 +1281,7 @@ function TrendsChart({ data, valueKey, target, label, unit, color = "#c8f542", m
   );
 }
 
-function TrendsSection({ history }) {
+function TrendsSection({ history, targets = DEFAULT_TARGETS }) {
   const [mode, setMode] = useState("daily");
   const days = Object.keys(history).sort();
   if (days.length < 2) return null;
@@ -1209,9 +1348,9 @@ function TrendsSection({ history }) {
           <button style={toggleStyle(mode === "weekly")} onClick={() => setMode("weekly")}>WEEKLY</button>
         </div>
       </div>
-      <TrendsChart data={data} valueKey="protein" target={165} label="Protein" unit="g" color="#c8f542" />
-      <TrendsChart data={data} valueKey="calories" target={2050} label="Calories" unit="cal" color="#5599ff" maxVal={2800} />
-      <TrendsChart data={data} valueKey="fiber" target={35} label="Fiber" unit="g" color="#aa88ff" />
+      <TrendsChart data={data} valueKey="protein" target={targets.protein} label="Protein" unit="g" color="#c8f542" />
+      <TrendsChart data={data} valueKey="calories" target={targets.calories} label="Calories" unit="cal" color="#5599ff" maxVal={Math.max(2800, targets.calories * 1.4)} />
+      <TrendsChart data={data} valueKey="fiber" target={targets.fiber} label="Fiber" unit="g" color="#aa88ff" />
       {hasSleep && <TrendsChart data={data} valueKey="sleep" target={8} label="Sleep" unit="h" color="#ff9500" maxVal={11} />}
       {mode === "weekly" && <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, color: "#333", marginTop: 4 }}>bars = avg of logged days per week</div>}
     </div>
@@ -1219,7 +1358,7 @@ function TrendsSection({ history }) {
 }
 
 // ── CoachTab ───────────────────────────────────────────────────────────────
-function CoachTab({ history, todayTotals, needed }) {
+function CoachTab({ history, todayTotals, needed, targets = DEFAULT_TARGETS }) {
   const [brief, setBrief] = useState(null);
   const [loading, setLoading] = useState(false);
   const [weeklyReport, setWeeklyReport] = useState(null);
@@ -1266,7 +1405,7 @@ function CoachTab({ history, todayTotals, needed }) {
       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, marginBottom: 4 }}>Coach</div>
       <div style={{ fontSize: 12, color: "#555", marginBottom: 20 }}>Analyzes your food, sleep, workouts, and trends against your goals.</div>
 
-      <TrendsSection history={history} />
+      <TrendsSection history={history} targets={targets} />
 
       <button onClick={generate} disabled={loading} style={{
         width: "100%", padding: "16px", background: loading ? "#1a1a1a" : "#c8f542",
@@ -1316,6 +1455,7 @@ function CoachTab({ history, todayTotals, needed }) {
 export default function GorillaTracker() {
   const [tab, setTab] = useState("today");
   const [history, setHistory] = useState({});
+  const [targets, setTargets] = useState(DEFAULT_TARGETS);
   const [loading, setLoading] = useState(false);
   const [analyzed, setAnalyzed] = useState(null);
   const [nudge, setNudge] = useState(null);
@@ -1326,6 +1466,8 @@ export default function GorillaTracker() {
     try {
       const saved = localStorage.getItem("gorilla-history");
       if (saved) setHistory(JSON.parse(saved));
+      const savedTargets = localStorage.getItem("gorilla-targets");
+      if (savedTargets) setTargets(JSON.parse(savedTargets));
     } catch {}
     setStorageReady(true);
   }, []);
@@ -1335,6 +1477,11 @@ export default function GorillaTracker() {
     if (!storageReady) return;
     try { localStorage.setItem("gorilla-history", JSON.stringify(history)); } catch {}
   }, [history, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    try { localStorage.setItem("gorilla-targets", JSON.stringify(targets)); } catch {}
+  }, [targets, storageReady]);
 
   const todayKey = TODAY_KEY();
   const today = history[todayKey] || EMPTY_DAY();
@@ -1371,9 +1518,9 @@ export default function GorillaTracker() {
 
   const triggerNudge = (meal, updatedTotals) => {
     const updatedNeeded = {
-      protein: Math.max(0, TARGETS.protein - updatedTotals.protein),
-      calories: Math.max(0, TARGETS.calories - updatedTotals.calories),
-      fiber: Math.max(0, TARGETS.fiber - updatedTotals.fiber),
+      protein: Math.max(0, targets.protein - updatedTotals.protein),
+      calories: Math.max(0, targets.calories - updatedTotals.calories),
+      fiber: Math.max(0, targets.fiber - updatedTotals.fiber),
     };
     getMealNudge(updatedTotals, updatedNeeded, meal.name).then(msg => { if (msg) setNudge(msg); });
   };
@@ -1396,9 +1543,9 @@ export default function GorillaTracker() {
   };
 
   const needed = {
-    protein: Math.max(0, TARGETS.protein - totals.protein),
-    calories: Math.max(0, TARGETS.calories - totals.calories),
-    fiber: Math.max(0, TARGETS.fiber - totals.fiber),
+    protein: Math.max(0, targets.protein - totals.protein),
+    calories: Math.max(0, targets.calories - totals.calories),
+    fiber: Math.max(0, targets.fiber - totals.fiber),
   };
 
   const TABS = ["today", "coach", "history", "profile", "import"];
@@ -1460,9 +1607,9 @@ export default function GorillaTracker() {
           <div>
             {/* Macro rings */}
             <div style={{ display: "flex", justifyContent: "space-around", marginBottom: 24 }}>
-              <MacroRing label="Protein" value={totals.protein} target={TARGETS.protein} color="#c8f542" />
-              <MacroRing label="Calories" value={totals.calories} target={TARGETS.calories} color="#5599ff" unit="" />
-              <MacroRing label="Fiber" value={totals.fiber} target={TARGETS.fiber} color="#f5a623" />
+              <MacroRing label="Protein" value={totals.protein} target={targets.protein} color="#c8f542" />
+              <MacroRing label="Calories" value={totals.calories} target={targets.calories} color="#5599ff" unit="" />
+              <MacroRing label="Fiber" value={totals.fiber} target={targets.fiber} color="#f5a623" />
             </div>
 
             {/* Still needed */}
@@ -1534,13 +1681,18 @@ export default function GorillaTracker() {
         )}
 
         {/* HISTORY TAB */}
-        {tab === "coach" && <CoachTab history={history} todayTotals={totals} needed={needed} />}
+        {tab === "coach" && <CoachTab history={history} todayTotals={totals} needed={needed} targets={targets} />}
 
-        {tab === "history" && <WeeklyReport history={history} />}
+        {tab === "history" && <WeeklyReport history={history} targets={targets} />}
 
         {/* PROFILE TAB */}
         {tab === "profile" && (
-          <ProfileTab history={history} onScan={(date, scan) => setHistory(h => ({ ...h, [date]: { ...(h[date] || EMPTY_DAY()), bodyScan: scan } }))} />
+          <ProfileTab
+            history={history}
+            targets={targets}
+            onUpdateTargets={setTargets}
+            onScan={(date, scan) => setHistory(h => ({ ...h, [date]: { ...(h[date] || EMPTY_DAY()), bodyScan: scan } }))}
+          />
         )}
 
         {/* IMPORT TAB */}
