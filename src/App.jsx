@@ -618,6 +618,91 @@ function WeeklyReport({ history }) {
   );
 }
 
+// ── AnalyzedCard ───────────────────────────────────────────────────────────
+function AnalyzedCard({ item, index, total, onConfirm, onDismiss }) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ name: item.name, protein: item.protein, calories: item.calories, fiber: item.fiber });
+
+  const inp = (field, placeholder) => (
+    <input
+      type={field === "name" ? "text" : "number"}
+      placeholder={placeholder}
+      value={form[field]}
+      onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))}
+      style={{
+        background: "#0a0a0a", border: "1px solid #333", borderRadius: 4,
+        padding: "8px 10px", color: "#f5f2ed", fontSize: 13,
+        fontFamily: "'DM Sans', sans-serif", width: "100%", boxSizing: "border-box",
+      }}
+    />
+  );
+
+  const save = () => {
+    onConfirm({
+      ...item,
+      name: form.name || item.name,
+      protein: parseFloat(form.protein) || 0,
+      calories: parseFloat(form.calories) || 0,
+      fiber: parseFloat(form.fiber) || 0,
+    });
+  };
+
+  return (
+    <div style={{ background: "#141414", border: "1px solid #c8f542", borderRadius: 8, padding: 16, marginBottom: 8 }}>
+      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#c8f542", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>
+        DETECTED {total > 1 ? `${index + 1}/${total}` : ""}
+      </div>
+      {editing ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+          {inp("name", "Meal name")}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            {inp("protein", "Protein g")}
+            {inp("calories", "Calories")}
+            {inp("fiber", "Fiber g")}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 15, color: "#f5f2ed", marginBottom: 6 }}>{item.name}</div>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", marginBottom: 12 }}>
+            {item.protein}g protein · {item.calories} cal · {item.fiber}g fiber
+          </div>
+          {item.notes && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginBottom: 12 }}>{item.notes}</div>}
+        </>
+      )}
+      <div style={{ display: "flex", gap: 8 }}>
+        {editing ? (
+          <>
+            <button onClick={save} style={{
+              flex: 2, padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a", letterSpacing: "0.1em",
+            }}>CONFIRM</button>
+            <button onClick={() => setEditing(false)} style={{
+              flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #333", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
+            }}>BACK</button>
+          </>
+        ) : (
+          <>
+            <button onClick={() => onConfirm(item)} style={{
+              flex: 2, padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a", letterSpacing: "0.1em",
+            }}>CONFIRM</button>
+            <button onClick={() => setEditing(true)} style={{
+              flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #444", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#c8f542", letterSpacing: "0.1em",
+            }}>EDIT</button>
+            <button onClick={onDismiss} style={{
+              flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #333", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
+            }}>DISMISS</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ───────────────────────────────────────────────────────────────
 export default function GorillaTracker() {
   const [tab, setTab] = useState("today");
@@ -773,26 +858,14 @@ export default function GorillaTracker() {
             {analyzed?.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 {analyzed.map((item, i) => (
-                  <div key={i} style={{ background: "#141414", border: "1px solid #c8f542", borderRadius: 8, padding: 16, marginBottom: 8 }}>
-                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#c8f542", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>
-                      DETECTED {analyzed.length > 1 ? `${i + 1}/${analyzed.length}` : ""}
-                    </div>
-                    <div style={{ fontSize: 15, color: "#f5f2ed", marginBottom: 6 }}>{item.name}</div>
-                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", marginBottom: 12 }}>
-                      {item.protein}g protein · {item.calories} cal · {item.fiber}g fiber
-                    </div>
-                    {item.notes && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginBottom: 12 }}>{item.notes}</div>}
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button onClick={() => confirmOne(i)} style={{
-                        flex: 1, padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
-                        cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a", letterSpacing: "0.1em",
-                      }}>CONFIRM</button>
-                      <button onClick={() => dismissOne(i)} style={{
-                        flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #333", borderRadius: 4,
-                        cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
-                      }}>DISMISS</button>
-                    </div>
-                  </div>
+                  <AnalyzedCard
+                    key={i}
+                    item={item}
+                    index={i}
+                    total={analyzed.length}
+                    onConfirm={(edited) => { pushMeal(edited); dismissOne(i); }}
+                    onDismiss={() => dismissOne(i)}
+                  />
                 ))}
                 {analyzed.length > 1 && (
                   <button onClick={confirmAll} style={{
