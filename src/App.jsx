@@ -74,6 +74,55 @@ Be accurate. If the image is unclear, make your best estimate. Never refuse.`,
   };
 }
 
+// ── Claude before/after call ───────────────────────────────────────────────
+async function analyzeBeforeAfter(b64Before, mimeBefore, b64After, mimeAfter) {
+  const resp = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      system: `You are a precise nutrition analyzer for a fitness tracking app.
+The user is a 41yo male, 167 lbs, targeting 165g protein / 2100 cal / 35g fiber daily.
+You will receive two photos of the same plate: the first is BEFORE eating, the second is AFTER.
+Estimate ONLY what was actually consumed (the difference between the two photos).
+Respond ONLY with valid JSON (no markdown, no explanation):
+{"name":"<short meal name>","protein":<number>,"calories":<number>,"fiber":<number>,"notes":"<note what was left uneaten>"}`,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "BEFORE eating:" },
+          { type: "image", source: { type: "base64", media_type: mimeBefore, data: b64Before } },
+          { type: "text", text: "AFTER eating:" },
+          { type: "image", source: { type: "base64", media_type: mimeAfter, data: b64After } },
+          { type: "text", text: "Return JSON for only what was consumed." },
+        ],
+      }],
+    }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `API error ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  const text = data.content?.find(b => b.type === "text")?.text;
+  if (!text) throw new Error("No text in API response");
+
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("No JSON found in response");
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  return {
+    name: parsed.name || "Unknown meal",
+    protein: Number(parsed.protein) || 0,
+    calories: Number(parsed.calories) || 0,
+    fiber: Number(parsed.fiber) || 0,
+    notes: parsed.notes || "",
+  };
+}
+
 // ── MacroRing ──────────────────────────────────────────────────────────────
 function MacroRing({ label, value, target, color, unit = "g" }) {
   const p = pct(value, target);
@@ -135,6 +184,7 @@ function MealRow({ meal, onDelete }) {
 // ── PhotoUpload ────────────────────────────────────────────────────────────
 function PhotoUpload({ onAnalyzed, loading, setLoading }) {
   const fileRef = useRef();
+  const [pendingFiles, setPendingFiles] = useState(null);
 
   const readFile = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -145,6 +195,7 @@ function PhotoUpload({ onAnalyzed, loading, setLoading }) {
 
   const handleFiles = async (files) => {
     if (!files?.length) return;
+    setPendingFiles(null);
     setLoading(true);
     try {
       const fileData = await Promise.all(Array.from(files).map(readFile));
@@ -158,12 +209,37 @@ function PhotoUpload({ onAnalyzed, loading, setLoading }) {
     }
   };
 
+  const handleBeforeAfter = async (files) => {
+    setPendingFiles(null);
+    setLoading(true);
+    try {
+      const [f1, f2] = await Promise.all([readFile(files[0]), readFile(files[1])]);
+      const result = await analyzeBeforeAfter(f1.base64, f1.mimeType, f2.base64, f2.mimeType);
+      onAnalyzed([result]);
+    } catch (err) {
+      console.error(err);
+      alert("Analysis failed: " + err.message + "\n\nUse manual entry instead.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onFileChange = (e) => {
+    const files = e.target.files;
+    if (files.length === 2) {
+      setPendingFiles(files);
+    } else {
+      handleFiles(files);
+    }
+    e.target.value = "";
+  };
+
   return (
     <div>
       <input
         ref={fileRef} type="file" accept="image/*" multiple
         style={{ display: "none" }}
-        onChange={e => handleFiles(e.target.files)}
+        onChange={onFileChange}
       />
       <button
         onClick={() => fileRef.current?.click()}
@@ -177,6 +253,26 @@ function PhotoUpload({ onAnalyzed, loading, setLoading }) {
       >
         {loading ? "ANALYZING..." : "📸 LOG FOOD PHOTO"}
       </button>
+      {pendingFiles && (
+        <div style={{ marginTop: 8, background: "#141414", border: "1px solid #333", borderRadius: 8, padding: 16 }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#888", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 6 }}>
+            2 PHOTOS SELECTED
+          </div>
+          <div style={{ fontSize: 13, color: "#f5f2ed", marginBottom: 12 }}>
+            Same plate before &amp; after?
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => handleBeforeAfter(pendingFiles)} style={{
+              flex: 1, padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a", letterSpacing: "0.1em",
+            }}>BEFORE &amp; AFTER</button>
+            <button onClick={() => handleFiles(pendingFiles)} style={{
+              flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #333", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
+            }}>SEPARATE MEALS</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
