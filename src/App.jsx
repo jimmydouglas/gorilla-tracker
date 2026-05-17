@@ -74,6 +74,48 @@ Be accurate. If the image is unclear, make your best estimate. Never refuse.`,
   };
 }
 
+// ── Claude text description call ──────────────────────────────────────────
+async function analyzeTextDescription(description) {
+  const resp = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      system: `You are a precise nutrition analyzer for a fitness tracking app.
+The user is a 41yo male, 167 lbs, targeting 165g protein / 2100 cal / 35g fiber daily.
+The user will describe a meal in plain text. Estimate the macros as accurately as possible based on typical serving sizes.
+Respond ONLY with valid JSON (no markdown, no explanation):
+{"name":"<short meal name>","protein":<number>,"calories":<number>,"fiber":<number>,"notes":"<1 sentence on assumptions made>"}`,
+      messages: [{
+        role: "user",
+        content: [{ type: "text", text: description }],
+      }],
+    }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `API error ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  const text = data.content?.find(b => b.type === "text")?.text;
+  if (!text) throw new Error("No text in API response");
+
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("No JSON found in response");
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  return {
+    name: parsed.name || "Unknown meal",
+    protein: Number(parsed.protein) || 0,
+    calories: Number(parsed.calories) || 0,
+    fiber: Number(parsed.fiber) || 0,
+    notes: parsed.notes || "",
+  };
+}
+
 // ── Claude before/after call ───────────────────────────────────────────────
 async function analyzeBeforeAfter(b64Before, mimeBefore, b64After, mimeAfter) {
   const resp = await fetch("/api/analyze", {
@@ -271,6 +313,71 @@ function PhotoUpload({ onAnalyzed, loading, setLoading }) {
               cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
             }}>SEPARATE MEALS</button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── TextEntry ─────────────────────────────────────────────────────────────
+function TextEntry({ onAnalyzed }) {
+  const [open, setOpen] = useState(false);
+  const [description, setDescription] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const analyze = async () => {
+    if (!description.trim()) return;
+    setLoading(true);
+    try {
+      const result = await analyzeTextDescription(description.trim());
+      onAnalyzed([result]);
+      setDescription("");
+      setOpen(false);
+    } catch (err) {
+      console.error(err);
+      alert("Analysis failed: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); analyze(); }
+  };
+
+  return (
+    <div>
+      <button onClick={() => setOpen(o => !o)} style={{
+        width: "100%", padding: "12px", background: "transparent",
+        border: "1px solid #2a2a2a", borderRadius: 6, cursor: "pointer",
+        fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888",
+        letterSpacing: "0.15em", textTransform: "uppercase", marginTop: 8,
+      }}>
+        {open ? "CANCEL" : "✏️ DESCRIBE MEAL"}
+      </button>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          <textarea
+            autoFocus
+            placeholder="e.g. grilled salmon fillet, half cup of rice, side salad"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={3}
+            style={{
+              width: "100%", background: "#1a1a1a", border: "1px solid #2a2a2a",
+              borderRadius: 4, padding: "10px 12px", color: "#f5f2ed", fontSize: 13,
+              fontFamily: "'DM Sans', sans-serif", resize: "none", boxSizing: "border-box",
+            }}
+          />
+          <button onClick={analyze} disabled={loading || !description.trim()} style={{
+            width: "100%", marginTop: 6, padding: "12px", background: loading ? "#1a1a1a" : "#2a2a2a",
+            border: "none", borderRadius: 4, cursor: loading ? "not-allowed" : "pointer",
+            fontFamily: "'DM Mono', monospace", fontSize: 11, color: loading ? "#555" : "#c8f542",
+            letterSpacing: "0.15em", textTransform: "uppercase",
+          }}>
+            {loading ? "ANALYZING..." : "ESTIMATE MACROS →"}
+          </button>
         </div>
       )}
     </div>
@@ -641,6 +748,9 @@ export default function GorillaTracker() {
 
             {/* Photo upload */}
             <PhotoUpload onAnalyzed={onAnalyzed} loading={loading} setLoading={setLoading} />
+
+            {/* Text description */}
+            <TextEntry onAnalyzed={onAnalyzed} />
 
             {/* Analyzed result confirmation */}
             {analyzed?.length > 0 && (
