@@ -196,6 +196,89 @@ async function analyzeBodyScanScreenshot(base64, mimeType) {
   return { weight: parseFloat(r.weight) || 0, smm: parseFloat(r.smm) || 0, fatMass: parseFloat(r.fatMass) || 0, inBodyScore: r.inBodyScore ? parseInt(r.inBodyScore) : null };
 }
 
+// ── Coaching functions ────────────────────────────────────────────────────
+function buildHistorySummary(history) {
+  return Object.entries(history)
+    .filter(([, d]) => d.meals?.length || d.sleep || d.workout)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-10)
+    .map(([date, d]) => {
+      const s = sumDay(d.meals || []);
+      const sleep = d.sleep ? `sleep ${d.sleep.hours}h/${d.sleep.score}` : "no sleep logged";
+      const workout = d.workout ? `${d.workout.type} ${d.workout.calories}cal effort${d.workout.effort}` : "rest";
+      return `${date.slice(5)}: protein ${s.protein}g cal ${s.calories} fiber ${s.fiber}g | ${sleep} | ${workout}`;
+    }).join("\n");
+}
+
+async function getCoachingBrief(history, todayTotals, needed, profile) {
+  const historySummary = buildHistorySummary(history);
+  const scans = Object.entries(history).filter(([,d]) => d.bodyScan).sort(([a],[b]) => a.localeCompare(b));
+  const latestScan = scans.length ? scans[scans.length-1][1].bodyScan : null;
+
+  const prompt = `USER PROFILE:
+Jimmy, 41M | Current: ${latestScan ? `${latestScan.weight}lbs, ${latestScan.smm}lb muscle, ${latestScan.fatMass}lb fat` : "166.9lbs, 81.4lb muscle, 24.9lb fat"}
+Goals: Shredded Labor Day 2026 (~10-12% BF), Gorilla Summer 2027 (85-88lb SMM)
+Daily targets: 165g protein, 2000-2100 cal, 35g fiber, 5g creatine
+Meds: Zepbound tirzepatide — never push past fullness signals
+Training: SixPax HIIT Mon/Wed/Fri, runs Tue/Thu
+
+LAST 10 DAYS:
+${historySummary}
+
+TODAY SO FAR:
+Protein: ${todayTotals.protein}g | Calories: ${todayTotals.calories} | Fiber: ${todayTotals.fiber}g
+Still needed: ${needed.protein}g protein, ${needed.calories} cal, ${needed.fiber}g fiber
+
+Analyze this data and respond ONLY with valid JSON:
+{
+  "todayStatus": "<2-3 sentences on how today is tracking and what to do to close it out>",
+  "patterns": ["<pattern 1>", "<pattern 2>", "<pattern 3>"],
+  "flags": ["<flag if any — skip array if none>"],
+  "recommendation": "<one specific, actionable thing to do today or tomorrow>"
+}`;
+
+  const resp = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    }),
+  });
+  if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e?.error?.message || `API error ${resp.status}`); }
+  const data = await resp.json();
+  const text = data.content?.find(b => b.type === "text")?.text;
+  if (!text) throw new Error("No response");
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("No JSON in response");
+  return JSON.parse(m[0]);
+}
+
+async function getMealNudge(todayTotals, needed, lastMealName) {
+  const prompt = `FITNESS COACH — respond in ONE sentence, direct, no fluff.
+User just logged: "${lastMealName}"
+Today's totals now: ${todayTotals.protein}g protein, ${todayTotals.calories} cal, ${todayTotals.fiber}g fiber
+Still needed to hit targets: ${needed.protein}g protein, ${needed.calories} cal, ${needed.fiber}g fiber
+Targets: 165g protein, 2000-2100 cal, 35g fiber.
+Meds: Zepbound — never suggest eating past fullness.
+
+If targets are met or exceeded, say so briefly. Otherwise give one specific suggestion for what to eat next to close the gap. Be direct.`;
+
+  const resp = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 150,
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    }),
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  return data.content?.find(b => b.type === "text")?.text?.trim() || null;
+}
+
 // ── Claude before/after call ───────────────────────────────────────────────
 async function analyzeBeforeAfter(b64Before, mimeBefore, b64After, mimeAfter) {
   const resp = await fetch("/api/analyze", {
@@ -944,12 +1027,68 @@ function ProfileTab({ history, onScan }) {
   );
 }
 
+// ── CoachTab ───────────────────────────────────────────────────────────────
+function CoachTab({ history, todayTotals, needed }) {
+  const [brief, setBrief] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const generate = async () => {
+    setLoading(true);
+    try {
+      const result = await getCoachingBrief(history, todayTotals, needed, PROFILE);
+      setBrief(result);
+    } catch (err) {
+      alert("Coach failed: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const section = (label, color, items) => (
+    <div style={{ background: "#141414", borderRadius: 8, padding: 16, marginBottom: 12 }}>
+      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color, letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>{label}</div>
+      {Array.isArray(items)
+        ? items.map((item, i) => (
+          <div key={i} style={{ fontSize: 13, color: "#f5f2ed", marginBottom: i < items.length - 1 ? 6 : 0, paddingLeft: 8, borderLeft: `2px solid ${color}` }}>{item}</div>
+        ))
+        : <div style={{ fontSize: 13, color: "#f5f2ed", lineHeight: 1.5 }}>{items}</div>
+      }
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, marginBottom: 4 }}>Coach</div>
+      <div style={{ fontSize: 12, color: "#555", marginBottom: 20 }}>Analyzes your food, sleep, workouts, and trends against your goals.</div>
+
+      <button onClick={generate} disabled={loading} style={{
+        width: "100%", padding: "16px", background: loading ? "#1a1a1a" : "#c8f542",
+        border: "none", borderRadius: 6, cursor: loading ? "not-allowed" : "pointer",
+        fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, letterSpacing: "0.05em",
+        color: loading ? "#888" : "#0a0a0a", marginBottom: 20,
+      }}>
+        {loading ? "ANALYZING YOUR DATA..." : brief ? "↻ REFRESH BRIEF" : "GENERATE COACHING BRIEF"}
+      </button>
+
+      {brief && (
+        <>
+          {section("Today", "#5599ff", brief.todayStatus)}
+          {brief.flags?.length > 0 && section("Flags", "#ff4444", brief.flags)}
+          {section("Patterns", "#f5a623", brief.patterns)}
+          {section("Recommendation", "#c8f542", brief.recommendation)}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Main App ───────────────────────────────────────────────────────────────
 export default function GorillaTracker() {
   const [tab, setTab] = useState("today");
   const [history, setHistory] = useState({});
   const [loading, setLoading] = useState(false);
   const [analyzed, setAnalyzed] = useState(null);
+  const [nudge, setNudge] = useState(null);
   const [storageReady, setStorageReady] = useState(false);
 
   // Load from localStorage
@@ -999,8 +1138,32 @@ export default function GorillaTracker() {
   };
 
   const dismissOne = (i) => setAnalyzed(a => a.filter((_, j) => j !== i));
-  const confirmOne = (i) => { pushMeal(analyzed[i]); dismissOne(i); };
-  const confirmAll = () => { analyzed.forEach(pushMeal); setAnalyzed(null); };
+
+  const triggerNudge = (meal, updatedTotals) => {
+    const updatedNeeded = {
+      protein: Math.max(0, TARGETS.protein - updatedTotals.protein),
+      calories: Math.max(0, TARGETS.calories - updatedTotals.calories),
+      fiber: Math.max(0, TARGETS.fiber - updatedTotals.fiber),
+    };
+    getMealNudge(updatedTotals, updatedNeeded, meal.name).then(msg => { if (msg) setNudge(msg); });
+  };
+
+  const confirmOne = (i) => {
+    const meal = analyzed[i];
+    const currentMeals = today.meals || [];
+    const updatedTotals = sumDay([...currentMeals, meal]);
+    pushMeal(meal);
+    dismissOne(i);
+    triggerNudge(meal, updatedTotals);
+  };
+
+  const confirmAll = () => {
+    const allMeals = analyzed;
+    const updatedTotals = sumDay([...(today.meals || []), ...allMeals]);
+    allMeals.forEach(pushMeal);
+    setAnalyzed(null);
+    triggerNudge({ name: `${allMeals.length} meals` }, updatedTotals);
+  };
 
   const needed = {
     protein: Math.max(0, TARGETS.protein - totals.protein),
@@ -1008,7 +1171,7 @@ export default function GorillaTracker() {
     fiber: Math.max(0, TARGETS.fiber - totals.fiber),
   };
 
-  const TABS = ["today", "history", "profile", "import"];
+  const TABS = ["today", "coach", "history", "profile", "import"];
 
   const HISTORICAL_DATA = {
     "2026-05-04": { date: "2026-05-04", meals: [{ id: 1, name: "Eggs + chicken + shake", protein: 69, calories: 590, fiber: 3, notes: "Post-HIIT" }, { id: 2, name: "Kale salad + salmon (Bluey's)", protein: 40, calories: 570, fiber: 8, notes: "" }, { id: 3, name: "Cottage cheese", protein: 19, calories: 180, fiber: 0, notes: "" }, { id: 4, name: "Salmon + miracle noodles + asparagus", protein: 38, calories: 410, fiber: 4, notes: "" }, { id: 5, name: "Chobani + Chomps", protein: 30, calories: 250, fiber: 0, notes: "" }], sleep: { hours: 4.4, score: 59 }, workout: { type: "HIIT", duration: 27, calories: 226, hr: 123, effort: 4 } },
@@ -1119,6 +1282,15 @@ export default function GorillaTracker() {
 
             <ManualEntry onAdd={addMeal} />
 
+            {/* Coach nudge */}
+            {nudge && (
+              <div style={{ marginTop: 12, background: "#0a1a0a", border: "1px solid #c8f542", borderRadius: 8, padding: "12px 16px", display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <span style={{ fontSize: 16, lineHeight: 1.4 }}>🤖</span>
+                <div style={{ flex: 1, fontSize: 13, color: "#f5f2ed", lineHeight: 1.5 }}>{nudge}</div>
+                <button onClick={() => setNudge(null)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 16, padding: 0, lineHeight: 1 }}>×</button>
+              </div>
+            )}
+
             {/* Meal list */}
             {today.meals?.length > 0 && (
               <div style={{ marginTop: 20 }}>
@@ -1132,6 +1304,8 @@ export default function GorillaTracker() {
         )}
 
         {/* HISTORY TAB */}
+        {tab === "coach" && <CoachTab history={history} todayTotals={totals} needed={needed} />}
+
         {tab === "history" && <WeeklyReport history={history} />}
 
         {/* PROFILE TAB */}
