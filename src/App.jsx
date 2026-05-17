@@ -12,7 +12,10 @@ const PROFILE = {
   gorilla: "Summer 2027",
 };
 
-const TODAY_KEY = () => new Date().toISOString().slice(0, 10);
+const TODAY_KEY = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 const EMPTY_DAY = () => ({ date: TODAY_KEY(), meals: [], sleep: null, workout: null });
 
