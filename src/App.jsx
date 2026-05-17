@@ -30,6 +30,33 @@ function sumDay(meals) {
   );
 }
 
+// ── Image compression ─────────────────────────────────────────────────────
+function compressImage(file, maxPx = 1024, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => {
+        if (!blob) return reject(new Error("Compression failed"));
+        const reader = new FileReader();
+        reader.onload = e => resolve({ base64: e.target.result.split(",")[1], mimeType: "image/jpeg" });
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      }, "image/jpeg", quality);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
 // ── Claude vision call ─────────────────────────────────────────────────────
 async function analyzeFoodPhoto(base64, mimeType) {
   const resp = await fetch("/api/analyze", {
@@ -231,19 +258,12 @@ function PhotoUpload({ onAnalyzed, loading, setLoading }) {
   const fileRef = useRef();
   const [pendingFiles, setPendingFiles] = useState(null);
 
-  const readFile = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => resolve({ base64: e.target.result.split(",")[1], mimeType: file.type || "image/jpeg" });
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
   const handleFiles = async (files) => {
     if (!files?.length) return;
     setPendingFiles(null);
     setLoading(true);
     try {
-      const fileData = await Promise.all(Array.from(files).map(readFile));
+      const fileData = await Promise.all(Array.from(files).map(f => compressImage(f)));
       const results = await Promise.all(fileData.map(({ base64, mimeType }) => analyzeFoodPhoto(base64, mimeType)));
       onAnalyzed(results);
     } catch (err) {
@@ -258,7 +278,7 @@ function PhotoUpload({ onAnalyzed, loading, setLoading }) {
     setPendingFiles(null);
     setLoading(true);
     try {
-      const [f1, f2] = await Promise.all([readFile(files[0]), readFile(files[1])]);
+      const [f1, f2] = await Promise.all([compressImage(files[0]), compressImage(files[1])]);
       const result = await analyzeBeforeAfter(f1.base64, f1.mimeType, f2.base64, f2.mimeType);
       onAnalyzed([result]);
     } catch (err) {
