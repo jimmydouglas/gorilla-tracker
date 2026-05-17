@@ -1143,10 +1143,12 @@ function TrendsChart({ data, valueKey, target, label, unit, color = "#c8f542", m
 }
 
 function TrendsSection({ history }) {
+  const [mode, setMode] = useState("daily");
   const days = Object.keys(history).sort();
   if (days.length < 2) return null;
   const firstDate = new Date(days[0] + "T12:00:00");
-  const data = days.map(date => {
+
+  const dailyData = days.map(date => {
     const day = history[date];
     const meals = day.meals || [];
     const d = new Date(date + "T12:00:00");
@@ -1161,14 +1163,57 @@ function TrendsSection({ history }) {
       sleep: day.sleep?.hours || 0,
     };
   });
-  const hasSleep = data.some(d => d.sleep > 0);
+
+  const weeklyData = (() => {
+    const weeks = [];
+    let chunk = [];
+    dailyData.forEach((d, i) => {
+      chunk.push(d);
+      if ((i + 1) % 7 === 0 || i === dailyData.length - 1) {
+        const logged = chunk.filter(d => d.protein > 0 || d.calories > 0);
+        const n = logged.length || 1;
+        const sleepDays = chunk.filter(d => d.sleep > 0);
+        const wk = weeks.length + 1;
+        const start = chunk[0].label;
+        const end = chunk[chunk.length - 1].label;
+        weeks.push({
+          label: `W${wk}`,
+          sublabel: `${start}–${end}`,
+          weekStart: false,
+          protein: Math.round(logged.reduce((s, d) => s + d.protein, 0) / n),
+          calories: Math.round(logged.reduce((s, d) => s + d.calories, 0) / n),
+          fiber: Math.round(logged.reduce((s, d) => s + d.fiber, 0) / n),
+          sleep: sleepDays.length ? parseFloat((sleepDays.reduce((s, d) => s + d.sleep, 0) / sleepDays.length).toFixed(1)) : 0,
+        });
+        chunk = [];
+      }
+    });
+    return weeks;
+  })();
+
+  const data = mode === "weekly" ? weeklyData : dailyData;
+  const hasSleep = dailyData.some(d => d.sleep > 0);
+
+  const toggleStyle = active => ({
+    padding: "4px 10px", borderRadius: 4, border: "none", cursor: "pointer",
+    fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em",
+    background: active ? "#c8f542" : "#1a1a1a", color: active ? "#0a0a0a" : "#555",
+  });
+
   return (
     <div style={{ marginBottom: 24 }}>
-      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: "#555", marginBottom: 14, letterSpacing: "0.05em" }}>Trends</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: "#555", letterSpacing: "0.05em" }}>Trends</div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button style={toggleStyle(mode === "daily")} onClick={() => setMode("daily")}>DAILY</button>
+          <button style={toggleStyle(mode === "weekly")} onClick={() => setMode("weekly")}>WEEKLY</button>
+        </div>
+      </div>
       <TrendsChart data={data} valueKey="protein" target={165} label="Protein" unit="g" color="#c8f542" />
       <TrendsChart data={data} valueKey="calories" target={2050} label="Calories" unit="cal" color="#5599ff" maxVal={2800} />
       <TrendsChart data={data} valueKey="fiber" target={35} label="Fiber" unit="g" color="#aa88ff" />
       {hasSleep && <TrendsChart data={data} valueKey="sleep" target={8} label="Sleep" unit="h" color="#ff9500" maxVal={11} />}
+      {mode === "weekly" && <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, color: "#333", marginTop: 4 }}>bars = avg of logged days per week</div>}
     </div>
   );
 }
