@@ -136,33 +136,34 @@ function MealRow({ meal, onDelete }) {
 function PhotoUpload({ onAnalyzed, loading, setLoading }) {
   const fileRef = useRef();
 
-  const handleFile = async (file) => {
-    if (!file) return;
+  const readFile = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve({ base64: e.target.result.split(",")[1], mimeType: file.type || "image/jpeg" });
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const handleFiles = async (files) => {
+    if (!files?.length) return;
     setLoading(true);
     try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const dataUrl = e.target.result;
-        const base64 = dataUrl.split(",")[1];
-        const mimeType = file.type || "image/jpeg";
-        const result = await analyzeFoodPhoto(base64, mimeType);
-        onAnalyzed(result);
-        setLoading(false);
-      };
-      reader.readAsDataURL(file);
+      const fileData = await Promise.all(Array.from(files).map(readFile));
+      const results = await Promise.all(fileData.map(({ base64, mimeType }) => analyzeFoodPhoto(base64, mimeType)));
+      onAnalyzed(results);
     } catch (err) {
       console.error(err);
-      setLoading(false);
       alert("Analysis failed: " + err.message + "\n\nUse manual entry instead.");
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <div>
       <input
-        ref={fileRef} type="file" accept="image/*"
+        ref={fileRef} type="file" accept="image/*" multiple
         style={{ display: "none" }}
-        onChange={e => handleFile(e.target.files[0])}
+        onChange={e => handleFiles(e.target.files)}
       />
       <button
         onClick={() => fileRef.current?.click()}
@@ -431,9 +432,15 @@ export default function GorillaTracker() {
     }));
   };
 
+  const pushMeal = (meal) => {
+    setHistory(h => {
+      const existing = h[todayKey] || EMPTY_DAY();
+      return { ...h, [todayKey]: { ...existing, meals: [...(existing.meals || []), { ...meal, id: Date.now() }] } };
+    });
+  };
+
   const addMeal = (meal) => {
-    const meals = [...(today.meals || []), { ...meal, id: Date.now() }];
-    updateToday({ meals });
+    pushMeal(meal);
     setAnalyzed(null);
   };
 
@@ -441,11 +448,13 @@ export default function GorillaTracker() {
     updateToday({ meals: today.meals.filter(m => m.id !== id) });
   };
 
-  const onAnalyzed = (result) => {
-    setAnalyzed(result);
+  const onAnalyzed = (results) => {
+    setAnalyzed(results);
   };
 
-  const confirmAnalyzed = () => { addMeal(analyzed); };
+  const dismissOne = (i) => setAnalyzed(a => a.filter((_, j) => j !== i));
+  const confirmOne = (i) => { pushMeal(analyzed[i]); dismissOne(i); };
+  const confirmAll = () => { analyzed.forEach(pushMeal); setAnalyzed(null); };
 
   const needed = {
     protein: Math.max(0, TARGETS.protein - totals.protein),
@@ -538,26 +547,36 @@ export default function GorillaTracker() {
             <PhotoUpload onAnalyzed={onAnalyzed} loading={loading} setLoading={setLoading} />
 
             {/* Analyzed result confirmation */}
-            {analyzed && (
-              <div style={{ marginTop: 12, background: "#141414", border: "1px solid #c8f542", borderRadius: 8, padding: 16 }}>
-                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#c8f542", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>
-                  DETECTED
-                </div>
-                <div style={{ fontSize: 15, color: "#f5f2ed", marginBottom: 6 }}>{analyzed.name}</div>
-                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", marginBottom: 12 }}>
-                  {analyzed.protein}g protein · {analyzed.calories} cal · {analyzed.fiber}g fiber
-                </div>
-                {analyzed.notes && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginBottom: 12 }}>{analyzed.notes}</div>}
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={confirmAnalyzed} style={{
-                    flex: 1, padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
-                    cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a", letterSpacing: "0.1em",
-                  }}>CONFIRM</button>
-                  <button onClick={() => setAnalyzed(null)} style={{
-                    flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #333", borderRadius: 4,
-                    cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
-                  }}>DISMISS</button>
-                </div>
+            {analyzed?.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                {analyzed.map((item, i) => (
+                  <div key={i} style={{ background: "#141414", border: "1px solid #c8f542", borderRadius: 8, padding: 16, marginBottom: 8 }}>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#c8f542", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>
+                      DETECTED {analyzed.length > 1 ? `${i + 1}/${analyzed.length}` : ""}
+                    </div>
+                    <div style={{ fontSize: 15, color: "#f5f2ed", marginBottom: 6 }}>{item.name}</div>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", marginBottom: 12 }}>
+                      {item.protein}g protein · {item.calories} cal · {item.fiber}g fiber
+                    </div>
+                    {item.notes && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginBottom: 12 }}>{item.notes}</div>}
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => confirmOne(i)} style={{
+                        flex: 1, padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
+                        cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a", letterSpacing: "0.1em",
+                      }}>CONFIRM</button>
+                      <button onClick={() => dismissOne(i)} style={{
+                        flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #333", borderRadius: 4,
+                        cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
+                      }}>DISMISS</button>
+                    </div>
+                  </div>
+                ))}
+                {analyzed.length > 1 && (
+                  <button onClick={confirmAll} style={{
+                    width: "100%", padding: "12px", background: "#1a2a1a", border: "1px solid #c8f542", borderRadius: 6,
+                    cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#c8f542", letterSpacing: "0.15em", textTransform: "uppercase",
+                  }}>CONFIRM ALL {analyzed.length} MEALS</button>
+                )}
               </div>
             )}
 
