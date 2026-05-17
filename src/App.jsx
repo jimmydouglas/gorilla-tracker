@@ -147,6 +147,55 @@ Respond ONLY with valid JSON (no markdown, no explanation):
   };
 }
 
+// ── Screenshot analysis helpers ───────────────────────────────────────────
+async function analyzeScreenshot(base64, mimeType, system, userText) {
+  const resp = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 500,
+      system,
+      messages: [{ role: "user", content: [
+        { type: "image", source: { type: "base64", media_type: mimeType, data: base64 } },
+        { type: "text", text: userText },
+      ]}],
+    }),
+  });
+  if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e?.error?.message || `API error ${resp.status}`); }
+  const data = await resp.json();
+  const text = data.content?.find(b => b.type === "text")?.text;
+  if (!text) throw new Error("No text in response");
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("No JSON in response");
+  return JSON.parse(m[0]);
+}
+
+async function analyzeWorkoutScreenshot(base64, mimeType) {
+  const r = await analyzeScreenshot(base64, mimeType,
+    `Extract workout data from this Apple Fitness/Health app screenshot. Return ONLY valid JSON:
+{"type":"<HIIT|Run|Walk|Cycle|Golf|Other>","duration":<minutes as integer>,"calories":<total calories as integer>,"hr":<avg heart rate BPM as integer>,"effort":<effort score 1-10 as integer or null if not shown>}`,
+    "Extract the workout stats from this screenshot.");
+  return { type: r.type || "HIIT", duration: parseInt(r.duration) || 0, calories: parseInt(r.calories) || 0, hr: parseInt(r.hr) || 0, effort: r.effort ? parseInt(r.effort) : null };
+}
+
+async function analyzeSleepScreenshot(base64, mimeType) {
+  const r = await analyzeScreenshot(base64, mimeType,
+    `Extract sleep data from this Oura Ring app screenshot. Return ONLY valid JSON:
+{"hours":<total sleep in decimal hours, e.g. 7h 12m = 7.2>,"score":<sleep score or efficiency percentage as integer>}
+Use Total Sleep for hours. Use Sleep Score if shown, otherwise use Efficiency %.`,
+    "Extract the sleep stats from this screenshot.");
+  return { hours: parseFloat(r.hours) || 0, score: parseInt(r.score) || 0 };
+}
+
+async function analyzeBodyScanScreenshot(base64, mimeType) {
+  const r = await analyzeScreenshot(base64, mimeType,
+    `Extract body composition data from this InBody scan screenshot. Return ONLY valid JSON:
+{"weight":<lbs as decimal>,"smm":<skeletal muscle mass lbs as decimal>,"fatMass":<body fat mass lbs as decimal>,"inBodyScore":<score as integer or null>}`,
+    "Extract the body scan stats from this screenshot.");
+  return { weight: parseFloat(r.weight) || 0, smm: parseFloat(r.smm) || 0, fatMass: parseFloat(r.fatMass) || 0, inBodyScore: r.inBodyScore ? parseInt(r.inBodyScore) : null };
+}
+
 // ── Claude before/after call ───────────────────────────────────────────────
 async function analyzeBeforeAfter(b64Before, mimeBefore, b64After, mimeAfter) {
   const resp = await fetch("/api/analyze", {
@@ -473,8 +522,36 @@ function ManualEntry({ onAdd }) {
 function MetaLogger({ day, onUpdate }) {
   const [sleepOpen, setSleepOpen] = useState(false);
   const [workoutOpen, setWorkoutOpen] = useState(false);
+  const [sleepScanning, setSleepScanning] = useState(false);
+  const [workoutScanning, setWorkoutScanning] = useState(false);
   const [sleep, setSleep] = useState({ hours: "", score: "" });
   const [workout, setWorkout] = useState({ type: "HIIT", duration: "", calories: "", hr: "", effort: "" });
+  const sleepFileRef = useRef();
+  const workoutFileRef = useRef();
+
+  const scanSleep = async (file) => {
+    if (!file) return;
+    setSleepScanning(true);
+    try {
+      const { base64, mimeType } = await compressImage(file);
+      const r = await analyzeSleepScreenshot(base64, mimeType);
+      setSleep({ hours: String(r.hours), score: String(r.score) });
+      setSleepOpen(true);
+    } catch (err) { alert("Scan failed: " + err.message); }
+    finally { setSleepScanning(false); sleepFileRef.current.value = ""; }
+  };
+
+  const scanWorkout = async (file) => {
+    if (!file) return;
+    setWorkoutScanning(true);
+    try {
+      const { base64, mimeType } = await compressImage(file);
+      const r = await analyzeWorkoutScreenshot(base64, mimeType);
+      setWorkout({ type: r.type, duration: String(r.duration), calories: String(r.calories), hr: String(r.hr), effort: r.effort ? String(r.effort) : "" });
+      setWorkoutOpen(true);
+    } catch (err) { alert("Scan failed: " + err.message); }
+    finally { setWorkoutScanning(false); workoutFileRef.current.value = ""; }
+  };
 
   const saveSleep = () => {
     onUpdate({ sleep: { hours: parseFloat(sleep.hours), score: parseInt(sleep.score) } });
@@ -497,20 +574,35 @@ function MetaLogger({ day, onUpdate }) {
     />
   );
 
+  const scanBtn = (loading, label) => ({
+    padding: "10px", background: loading ? "#1a1a1a" : "#0a1a0a",
+    border: "1px solid #c8f542", borderRadius: 4, cursor: loading ? "not-allowed" : "pointer",
+    fontFamily: "'DM Mono', monospace", fontSize: 10, color: loading ? "#555" : "#c8f542",
+    letterSpacing: "0.1em", whiteSpace: "nowrap",
+  });
+
   return (
     <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <input ref={sleepFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => scanSleep(e.target.files[0])} />
+      <input ref={workoutFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => scanWorkout(e.target.files[0])} />
+
       {/* Sleep */}
       <div style={{ flex: 1 }}>
-        <button onClick={() => setSleepOpen(o => !o)} style={{
-          width: "100%", padding: "10px", background: day.sleep ? "#1a2a1a" : "#1a1a1a",
-          border: `1px solid ${day.sleep ? "#c8f542" : "#2a2a2a"}`, borderRadius: 6,
-          cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 10,
-          color: day.sleep ? "#c8f542" : "#888", letterSpacing: "0.12em", textTransform: "uppercase",
-        }}>
-          {day.sleep ? `😴 ${day.sleep.hours}h · ${day.sleep.score}` : "😴 LOG SLEEP"}
-        </button>
+        <div style={{ display: "flex", gap: 4, marginBottom: sleepOpen ? 8 : 0 }}>
+          <button onClick={() => setSleepOpen(o => !o)} style={{
+            flex: 1, padding: "10px", background: day.sleep ? "#1a2a1a" : "#1a1a1a",
+            border: `1px solid ${day.sleep ? "#c8f542" : "#2a2a2a"}`, borderRadius: 6,
+            cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 10,
+            color: day.sleep ? "#c8f542" : "#888", letterSpacing: "0.12em", textTransform: "uppercase",
+          }}>
+            {day.sleep ? `😴 ${day.sleep.hours}h · ${day.sleep.score}` : "😴 SLEEP"}
+          </button>
+          <button onClick={() => sleepFileRef.current?.click()} style={scanBtn(sleepScanning, "📸")}>
+            {sleepScanning ? "..." : "📸"}
+          </button>
+        </div>
         {sleepOpen && (
-          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8 }}>
             {inp(sleep.hours, v => setSleep(s => ({ ...s, hours: v })), "Hours")}
             {inp(sleep.score, v => setSleep(s => ({ ...s, score: v })), "Score")}
             <button onClick={saveSleep} style={{
@@ -520,23 +612,26 @@ function MetaLogger({ day, onUpdate }) {
           </div>
         )}
       </div>
+
       {/* Workout */}
       <div style={{ flex: 1 }}>
-        <button onClick={() => setWorkoutOpen(o => !o)} style={{
-          width: "100%", padding: "10px", background: day.workout ? "#1a2a1a" : "#1a1a1a",
-          border: `1px solid ${day.workout ? "#c8f542" : "#2a2a2a"}`, borderRadius: 6,
-          cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 10,
-          color: day.workout ? "#c8f542" : "#888", letterSpacing: "0.12em", textTransform: "uppercase",
-        }}>
-          {day.workout ? `💪 ${day.workout.calories}cal` : "💪 LOG WORKOUT"}
-        </button>
+        <div style={{ display: "flex", gap: 4, marginBottom: workoutOpen ? 8 : 0 }}>
+          <button onClick={() => setWorkoutOpen(o => !o)} style={{
+            flex: 1, padding: "10px", background: day.workout ? "#1a2a1a" : "#1a1a1a",
+            border: `1px solid ${day.workout ? "#c8f542" : "#2a2a2a"}`, borderRadius: 6,
+            cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 10,
+            color: day.workout ? "#c8f542" : "#888", letterSpacing: "0.12em", textTransform: "uppercase",
+          }}>
+            {day.workout ? `💪 ${day.workout.calories}cal` : "💪 WORKOUT"}
+          </button>
+          <button onClick={() => workoutFileRef.current?.click()} style={scanBtn(workoutScanning, "📸")}>
+            {workoutScanning ? "..." : "📸"}
+          </button>
+        </div>
         {workoutOpen && (
-          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <select value={workout.type} onChange={e => setWorkout(w => ({ ...w, type: e.target.value }))}
-              style={{
-                background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 4,
-                padding: "10px 12px", color: "#f5f2ed", fontSize: 13,
-              }}>
+              style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 4, padding: "10px 12px", color: "#f5f2ed", fontSize: 13 }}>
               <option>HIIT</option><option>Run</option><option>Golf</option><option>Rest</option>
             </select>
             <div style={{ display: "flex", gap: 8 }}>
@@ -722,6 +817,137 @@ function AnalyzedCard({ item, index, total, onConfirm, onDismiss }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── ProfileTab ─────────────────────────────────────────────────────────────
+function ProfileTab({ history, onScan }) {
+  const [scanning, setScanning] = useState(false);
+  const [form, setForm] = useState(null);
+  const fileRef = useRef();
+
+  const scans = Object.entries(history)
+    .filter(([, d]) => d.bodyScan)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => ({ date, ...d.bodyScan }));
+
+  const baseline = scans[0] || { weight: 165.2, smm: 79.6, fatMass: 27.0 };
+  const latest = scans[scans.length - 1] || baseline;
+
+  const fatDelta = (latest.fatMass - baseline.fatMass).toFixed(1);
+  const smmDelta = (latest.smm - baseline.smm).toFixed(1);
+
+  const handleScanFile = async (file) => {
+    if (!file) return;
+    setScanning(true);
+    try {
+      const { base64, mimeType } = await compressImage(file);
+      const r = await analyzeBodyScanScreenshot(base64, mimeType);
+      setForm({ date: TODAY_KEY(), ...r });
+    } catch (err) { alert("Scan failed: " + err.message); }
+    finally { setScanning(false); fileRef.current.value = ""; }
+  };
+
+  const saveForm = () => {
+    if (!form) return;
+    onScan(form.date, { weight: parseFloat(form.weight), smm: parseFloat(form.smm), fatMass: parseFloat(form.fatMass), inBodyScore: form.inBodyScore ? parseInt(form.inBodyScore) : null });
+    setForm(null);
+  };
+
+  const inp = (field, label) => (
+    <div style={{ flex: 1 }}>
+      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#555", textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
+      <input type="number" value={form?.[field] ?? ""} onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))}
+        style={{ width: "100%", background: "#0a0a0a", border: "1px solid #333", borderRadius: 4, padding: "8px 10px", color: "#f5f2ed", fontSize: 13, fontFamily: "'DM Sans', sans-serif", boxSizing: "border-box" }} />
+    </div>
+  );
+
+  return (
+    <div>
+      <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleScanFile(e.target.files[0])} />
+
+      {/* Targets */}
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, marginBottom: 16 }}>Body Stats</div>
+      {[
+        { label: "Protein Target", val: "165g/day" },
+        { label: "Calorie Target", val: "2,000–2,100/day" },
+        { label: "Fiber Target", val: "35g/day" },
+        { label: "Shredded By", val: PROFILE.shredded, color: "#c8f542" },
+        { label: "Gorilla By", val: PROFILE.gorilla, color: "#c8f542" },
+      ].map(({ label, val, color }) => (
+        <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #1a1a1a" }}>
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
+          <span style={{ fontSize: 14, color: color || "#f5f2ed" }}>{val}</span>
+        </div>
+      ))}
+
+      {/* Progress */}
+      <div style={{ marginTop: 20, padding: 16, background: "#141414", borderRadius: 8, marginBottom: 16 }}>
+        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#888", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 12 }}>
+          Progress vs Baseline
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          {[
+            { label: "Weight", val: `${latest.weight} lbs` },
+            { label: "Fat Lost", val: `${fatDelta > 0 ? "+" : ""}${fatDelta} lbs`, color: fatDelta < 0 ? "#c8f542" : "#ff4444" },
+            { label: "Muscle", val: `${smmDelta > 0 ? "+" : ""}${smmDelta} lbs`, color: smmDelta > 0 ? "#c8f542" : "#ff4444" },
+          ].map(({ label, val, color }) => (
+            <div key={label} style={{ flex: 1, textAlign: "center" }}>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: color || "#f5f2ed", lineHeight: 1 }}>{val}</div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#555", textTransform: "uppercase", marginTop: 4 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+        {latest.inBodyScore && (
+          <div style={{ textAlign: "center", marginTop: 12, fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#888" }}>
+            InBody Score: <span style={{ color: "#c8f542" }}>{latest.inBodyScore}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Log scan */}
+      <button onClick={() => fileRef.current?.click()} disabled={scanning} style={{
+        width: "100%", padding: "14px", background: scanning ? "#1a1a1a" : "#0a1a0a",
+        border: "1px solid #c8f542", borderRadius: 6, cursor: scanning ? "not-allowed" : "pointer",
+        fontFamily: "'DM Mono', monospace", fontSize: 11, color: scanning ? "#555" : "#c8f542",
+        letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8,
+      }}>{scanning ? "SCANNING..." : "📸 SCAN INBODY SCREENSHOT"}</button>
+
+      {form && (
+        <div style={{ background: "#141414", border: "1px solid #c8f542", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#c8f542", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 12 }}>DETECTED</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            {inp("weight", "Weight (lbs)")}
+            {inp("smm", "Muscle (lbs)")}
+            {inp("fatMass", "Fat (lbs)")}
+            {inp("inBodyScore", "Score")}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={saveForm} style={{
+              flex: 2, padding: "10px", background: "#c8f542", border: "none", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#0a0a0a", letterSpacing: "0.1em",
+            }}>SAVE SCAN</button>
+            <button onClick={() => setForm(null)} style={{
+              flex: 1, padding: "10px", background: "#1a1a1a", border: "1px solid #333", borderRadius: 4,
+              cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", letterSpacing: "0.1em",
+            }}>DISMISS</button>
+          </div>
+        </div>
+      )}
+
+      {/* Scan history */}
+      {scans.length > 0 && (
+        <div>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#888", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>Scan History</div>
+          {[...scans].reverse().map(s => (
+            <div key={s.date} style={{ background: "#141414", borderRadius: 6, padding: "10px 14px", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#555" }}>{s.date.slice(5)}</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#f5f2ed" }}>{s.weight}lbs · {s.smm}lb muscle · {s.fatMass}lb fat</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -918,43 +1144,7 @@ export default function GorillaTracker() {
 
         {/* PROFILE TAB */}
         {tab === "profile" && (
-          <div>
-            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, marginBottom: 20 }}>Body Stats</div>
-            {[
-              { label: "Weight", val: `${PROFILE.weight} lbs` },
-              { label: "Body Fat", val: "14.9% (24.9 lbs)" },
-              { label: "Skeletal Muscle", val: `${PROFILE.smm} lbs` },
-              { label: "Protein Target", val: "165g/day" },
-              { label: "Calorie Target", val: "2,000–2,100/day" },
-              { label: "Fiber Target", val: "35g/day" },
-              { label: "Shredded By", val: PROFILE.shredded, color: "#c8f542" },
-              { label: "Gorilla By", val: PROFILE.gorilla, color: "#c8f542" },
-            ].map(({ label, val, color }) => (
-              <div key={label} style={{
-                display: "flex", justifyContent: "space-between", alignItems: "center",
-                padding: "12px 0", borderBottom: "1px solid #1a1a1a",
-              }}>
-                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#888", textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
-                <span style={{ fontSize: 14, color: color || "#f5f2ed" }}>{val}</span>
-              </div>
-            ))}
-
-            <div style={{ marginTop: 24, padding: 16, background: "#141414", borderRadius: 8 }}>
-              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#888", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>
-                Progress vs Baseline (May 4)
-              </div>
-              <div style={{ display: "flex", gap: 16 }}>
-                <div style={{ textAlign: "center", flex: 1 }}>
-                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: "#c8f542" }}>−2.1</div>
-                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#555", textTransform: "uppercase" }}>lbs fat lost</div>
-                </div>
-                <div style={{ textAlign: "center", flex: 1 }}>
-                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: "#c8f542" }}>+1.8</div>
-                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#555", textTransform: "uppercase" }}>lbs muscle gained</div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <ProfileTab history={history} onScan={(date, scan) => setHistory(h => ({ ...h, [date]: { ...(h[date] || EMPTY_DAY()), bodyScan: scan } }))} />
         )}
 
         {/* IMPORT TAB */}
