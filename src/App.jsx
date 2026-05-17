@@ -603,25 +603,19 @@ export default function GorillaTracker() {
   const [analyzed, setAnalyzed] = useState(null);
   const [storageReady, setStorageReady] = useState(false);
 
-  // Load from storage
+  // Load from localStorage
   useEffect(() => {
-    const load = async () => {
-      try {
-        const result = await window.storage.get("gorilla-history");
-        if (result?.value) setHistory(JSON.parse(result.value));
-      } catch {}
-      setStorageReady(true);
-    };
-    load();
+    try {
+      const saved = localStorage.getItem("gorilla-history");
+      if (saved) setHistory(JSON.parse(saved));
+    } catch {}
+    setStorageReady(true);
   }, []);
 
-  // Save to storage
+  // Save to localStorage
   useEffect(() => {
     if (!storageReady) return;
-    const save = async () => {
-      try { await window.storage.set("gorilla-history", JSON.stringify(history)); } catch {}
-    };
-    save();
+    try { localStorage.setItem("gorilla-history", JSON.stringify(history)); } catch {}
   }, [history, storageReady]);
 
   const todayKey = TODAY_KEY();
