@@ -255,6 +255,74 @@ Analyze this data and respond ONLY with valid JSON:
   return JSON.parse(m[0]);
 }
 
+async function getWeeklyReport(history) {
+  const days = Object.entries(history)
+    .filter(([, d]) => d.meals?.length || d.sleep || d.workout)
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  const formatWeek = (weekDays) => weekDays.map(([date, d]) => {
+    const s = sumDay(d.meals || []);
+    const sleep = d.sleep ? `${d.sleep.hours}h sleep score ${d.sleep.score}` : "no sleep logged";
+    const workout = d.workout ? `${d.workout.type} ${d.workout.calories}cal effort${d.workout.effort || "?"}` : "rest";
+    return `  ${date.slice(5)}: protein ${s.protein}g, cal ${s.calories}, fiber ${s.fiber}g | ${sleep} | ${workout}`;
+  }).join("\n");
+
+  const week1 = days.filter(([d]) => d >= "2026-05-04" && d <= "2026-05-10");
+  const week2 = days.filter(([d]) => d >= "2026-05-11" && d <= "2026-05-17");
+
+  const avg = (weekDays, fn) => {
+    const vals = weekDays.map(fn).filter(v => v > 0);
+    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
+  };
+
+  const scans = Object.entries(history).filter(([,d]) => d.bodyScan).sort(([a],[b]) => a.localeCompare(b));
+  const scanLines = scans.map(([date, d]) => `  ${date.slice(5)}: ${d.bodyScan.weight}lbs, ${d.bodyScan.smm}lb muscle, ${d.bodyScan.fatMass}lb fat${d.bodyScan.inBodyScore ? `, score ${d.bodyScan.inBodyScore}` : ""}`).join("\n");
+
+  const prompt = `WEEKLY FITNESS REPORT — be direct, data-driven, no fluff.
+
+USER: Jimmy, 41M | Goals: Shredded Labor Day 2026 (10-12% BF), Gorilla Summer 2027 (85-88lb SMM)
+Targets: 165g protein, 2000-2100 cal, 35g fiber/day
+Meds: Zepbound tirzepatide
+
+WEEK 1 (May 4-10):
+${formatWeek(week1)}
+Averages: protein ${avg(week1, ([,d]) => sumDay(d.meals||[]).protein)}g, cal ${avg(week1, ([,d]) => sumDay(d.meals||[]).calories)}, fiber ${avg(week1, ([,d]) => sumDay(d.meals||[]).fiber)}g, sleep ${avg(week1, ([,d]) => d.sleep?.score||0)} score
+
+WEEK 2 (May 11-17):
+${formatWeek(week2)}
+Averages: protein ${avg(week2, ([,d]) => sumDay(d.meals||[]).protein)}g, cal ${avg(week2, ([,d]) => sumDay(d.meals||[]).calories)}, fiber ${avg(week2, ([,d]) => sumDay(d.meals||[]).fiber)}g, sleep ${avg(week2, ([,d]) => d.sleep?.score||0)} score
+
+BODY SCANS:
+${scanLines || "  Baseline May 4: 165.2lbs, 79.6lb muscle, 27.0lb fat\n  May 16: 166.9lbs, 81.4lb muscle, 24.9lb fat"}
+
+Respond ONLY with valid JSON:
+{
+  "headline": "<one punchy sentence summarizing Week 2 performance>",
+  "weekComparison": "<2-3 sentences comparing week 1 vs week 2 across protein, calories, sleep>",
+  "bodyComp": "<1-2 sentences on body comp progress and trajectory toward Labor Day>",
+  "wins": ["<win 1>", "<win 2>", "<win 3>"],
+  "fixes": ["<fix 1>", "<fix 2>"],
+  "week3Focus": "<one specific focus for next week>"
+}`;
+
+  const resp = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1200,
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+    }),
+  });
+  if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e?.error?.message || `API error ${resp.status}`); }
+  const data = await resp.json();
+  const text = data.content?.find(b => b.type === "text")?.text;
+  if (!text) throw new Error("No response");
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("No JSON in response");
+  return JSON.parse(m[0]);
+}
+
 async function getMealNudge(todayTotals, needed, lastMealName) {
   const prompt = `FITNESS COACH — respond in ONE sentence, direct, no fluff.
 User just logged: "${lastMealName}"
@@ -1031,6 +1099,8 @@ function ProfileTab({ history, onScan }) {
 function CoachTab({ history, todayTotals, needed }) {
   const [brief, setBrief] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [weeklyReport, setWeeklyReport] = useState(null);
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
 
   const generate = async () => {
     setLoading(true);
@@ -1041,6 +1111,18 @@ function CoachTab({ history, todayTotals, needed }) {
       alert("Coach failed: " + err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const generateWeekly = async () => {
+    setWeeklyLoading(true);
+    try {
+      const result = await getWeeklyReport(history);
+      setWeeklyReport(result);
+    } catch (err) {
+      alert("Weekly report failed: " + err.message);
+    } finally {
+      setWeeklyLoading(false);
     }
   };
 
@@ -1065,9 +1147,18 @@ function CoachTab({ history, todayTotals, needed }) {
         width: "100%", padding: "16px", background: loading ? "#1a1a1a" : "#c8f542",
         border: "none", borderRadius: 6, cursor: loading ? "not-allowed" : "pointer",
         fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, letterSpacing: "0.05em",
-        color: loading ? "#888" : "#0a0a0a", marginBottom: 20,
+        color: loading ? "#888" : "#0a0a0a", marginBottom: 12,
       }}>
         {loading ? "ANALYZING YOUR DATA..." : brief ? "↻ REFRESH BRIEF" : "GENERATE COACHING BRIEF"}
+      </button>
+
+      <button onClick={generateWeekly} disabled={weeklyLoading} style={{
+        width: "100%", padding: "16px", background: weeklyLoading ? "#1a1a1a" : "#1a1a0a",
+        border: "1px solid #c8f542", borderRadius: 6, cursor: weeklyLoading ? "not-allowed" : "pointer",
+        fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, letterSpacing: "0.05em",
+        color: weeklyLoading ? "#888" : "#c8f542", marginBottom: 20,
+      }}>
+        {weeklyLoading ? "BUILDING REPORT..." : weeklyReport ? "↻ REFRESH WEEKLY REPORT" : "WEEKLY REPORT"}
       </button>
 
       {brief && (
@@ -1077,6 +1168,20 @@ function CoachTab({ history, todayTotals, needed }) {
           {section("Patterns", "#f5a623", brief.patterns)}
           {section("Recommendation", "#c8f542", brief.recommendation)}
         </>
+      )}
+
+      {weeklyReport && (
+        <div style={{ marginTop: brief ? 24 : 0 }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#555", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 12 }}>Weekly Report</div>
+          <div style={{ background: "#141414", borderRadius: 8, padding: 16, marginBottom: 12, borderLeft: "3px solid #c8f542" }}>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: "#c8f542", lineHeight: 1.2 }}>{weeklyReport.headline}</div>
+          </div>
+          {section("Week vs Week", "#5599ff", weeklyReport.weekComparison)}
+          {section("Body Composition", "#ff9500", weeklyReport.bodyComp)}
+          {weeklyReport.wins?.length > 0 && section("Wins", "#c8f542", weeklyReport.wins)}
+          {weeklyReport.fixes?.length > 0 && section("Fix These", "#ff4444", weeklyReport.fixes)}
+          {section("Week 3 Focus", "#aa88ff", weeklyReport.week3Focus)}
+        </div>
       )}
     </div>
   );
