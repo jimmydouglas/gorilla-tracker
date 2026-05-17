@@ -67,9 +67,10 @@ async function analyzeFoodPhoto(base64, mimeType) {
       max_tokens: 1000,
       system: `You are a precise nutrition analyzer for a fitness tracking app.
 The user is a 41yo male, 167 lbs, targeting 165g protein / 2100 cal / 35g fiber daily.
-When shown a food photo, respond ONLY with valid JSON (no markdown, no explanation):
-{"name":"<short meal name>","protein":<number>,"calories":<number>,"fiber":<number>,"notes":"<1 sentence observation>"}
-Be accurate. If the image is unclear, make your best estimate. Never refuse.`,
+When shown a food photo, estimate macros based ONLY on the actual portion visible in the image — not default restaurant or serving sizes. Use visual cues like plate size, density, and relative proportions to judge quantity. If the portion looks small, estimate small. Never default to a full serving size unless the photo clearly shows one.
+Respond ONLY with valid JSON (no markdown, no explanation):
+{"name":"<short meal name>","protein":<number>,"calories":<number>,"fiber":<number>,"notes":"<1 sentence on portion size observed>"}
+Be accurate. Never refuse.`,
       messages: [
         {
           role: "user",
