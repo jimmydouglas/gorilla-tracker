@@ -621,7 +621,31 @@ function WeeklyReport({ history }) {
 // ── AnalyzedCard ───────────────────────────────────────────────────────────
 function AnalyzedCard({ item, index, total, onConfirm, onDismiss }) {
   const [editing, setEditing] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
   const [form, setForm] = useState({ name: item.name, protein: item.protein, calories: item.calories, fiber: item.fiber });
+
+  const recalculate = async () => {
+    if (!form.name.trim()) return;
+    setRecalculating(true);
+    try {
+      const result = await analyzeTextDescription(form.name.trim());
+      setForm({ name: form.name, protein: result.protein, calories: result.calories, fiber: result.fiber });
+    } catch (err) {
+      alert("Recalculation failed: " + err.message);
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  const save = () => {
+    onConfirm({
+      ...item,
+      name: form.name || item.name,
+      protein: parseFloat(form.protein) || 0,
+      calories: parseFloat(form.calories) || 0,
+      fiber: parseFloat(form.fiber) || 0,
+    });
+  };
 
   const inp = (field, placeholder) => (
     <input
@@ -637,16 +661,6 @@ function AnalyzedCard({ item, index, total, onConfirm, onDismiss }) {
     />
   );
 
-  const save = () => {
-    onConfirm({
-      ...item,
-      name: form.name || item.name,
-      protein: parseFloat(form.protein) || 0,
-      calories: parseFloat(form.calories) || 0,
-      fiber: parseFloat(form.fiber) || 0,
-    });
-  };
-
   return (
     <div style={{ background: "#141414", border: "1px solid #c8f542", borderRadius: 8, padding: 16, marginBottom: 8 }}>
       <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#c8f542", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>
@@ -654,7 +668,15 @@ function AnalyzedCard({ item, index, total, onConfirm, onDismiss }) {
       </div>
       {editing ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-          {inp("name", "Meal name")}
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>{inp("name", "Meal name")}</div>
+            <button onClick={recalculate} disabled={recalculating} style={{
+              padding: "8px 12px", background: recalculating ? "#1a1a1a" : "#1a2a1a",
+              border: "1px solid #c8f542", borderRadius: 4, cursor: recalculating ? "not-allowed" : "pointer",
+              fontFamily: "'DM Mono', monospace", fontSize: 10, color: recalculating ? "#555" : "#c8f542",
+              letterSpacing: "0.1em", whiteSpace: "nowrap",
+            }}>{recalculating ? "..." : "↻ RECALC"}</button>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
             {inp("protein", "Protein g")}
             {inp("calories", "Calories")}
