@@ -845,7 +845,23 @@ export default function GorillaTracker() {
             <div style={{ fontSize: 13, color: "#888", marginBottom: 24 }}>Load all historical data from May 4 through today in one tap.</div>
             <button
               onClick={() => {
-                setHistory(prev => { const merged = { ...prev }; Object.entries(HISTORICAL_DATA).forEach(([k, v]) => { if (!merged[k] || !merged[k].meals || merged[k].meals.length === 0) { merged[k] = v; } }); return merged; });
+                setHistory(prev => {
+                  const merged = { ...prev };
+                  Object.entries(HISTORICAL_DATA).forEach(([k, v]) => {
+                    if (!merged[k]) {
+                      merged[k] = v;
+                    } else {
+                      const existingIds = new Set((merged[k].meals || []).map(m => m.id));
+                      const newMeals = (v.meals || []).filter(m => !existingIds.has(m.id));
+                      merged[k] = {
+                        ...v,
+                        ...merged[k],
+                        meals: [...newMeals, ...(merged[k].meals || [])],
+                      };
+                    }
+                  });
+                  return merged;
+                });
                 alert("13 days of data loaded!");
               }}
               style={{
