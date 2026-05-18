@@ -551,13 +551,13 @@ function PhotoUpload({ onAnalyzed, loading, setLoading }) {
   };
 
   const onFileChange = (e) => {
-    const files = e.target.files;
+    const files = Array.from(e.target.files);
+    e.target.value = "";
     if (files.length === 2) {
       setPendingFiles(files);
     } else {
       handleFiles(files);
     }
-    e.target.value = "";
   };
 
   return (
